@@ -1,366 +1,395 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { createRoot } from 'react-dom/client';
+import ReactDOM from 'react-dom/client';
 
-// --- Tipos de Datos ---
-interface Token {
-  symbol: string;
-  name: string;
-  balance: number;
-  usdValue: number;
-}
-
-interface Transaction {
-  hash: string;
-  from: string;
-  to: string;
-  value: string;
-  timeStamp: string;
-}
-
+// FIX: Add ethereum to the window object type for MetaMask compatibility
 declare global {
     interface Window {
         ethereum?: any;
     }
 }
 
-// --- Componentes de la UI ---
+const chains = [
+    { id: 1, name: 'Ethereum', symbol: 'ETH', apiUrl: 'https://api.etherscan.io/api', explorerUrl: 'https://etherscan.io', chainIdHex: '0x1', apiKeyName: 'ethereum' },
+    { id: 42161, name: 'Arbitrum', symbol: 'ARBETH', apiUrl: 'https://api-arbitrum.etherscan.io/api', explorerUrl: 'https://arbiscan.io', chainIdHex: '0xa4b1', apiKeyName: 'arbitrum' },
+    { id: 10, name: 'Optimism', symbol: 'OPETH', apiUrl: 'https://api-optimism.etherscan.io/api', explorerUrl: 'https://optimistic.etherscan.io', chainIdHex: '0xa', apiKeyName: 'optimism' },
+    { id: 8453, name: 'Base', symbol: 'BASEETH', apiUrl: 'https://api-base.etherscan.io/api', explorerUrl: 'https://basescan.org', chainIdHex: '0x2105', apiKeyName: 'base' },
+];
 
-const Spinner = () => <div className="spinner"></div>;
+// --- HELPERS ---
+const isMobileDevice = () => {
+    // Standard check for most mobile devices
+    if (/Android|webOS|iPhone|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
+        return true;
+    }
+    // Special check for iPad on iOS 13+ which reports as a Mac
+    if (/Macintosh/i.test(navigator.userAgent) && 'ontouchend' in document) {
+        return true;
+    }
+    return false;
+};
 
-const LoadingScreen = ({ message }: { message: string }) => (
-  <div className="loading-container">
-    <Spinner />
-    <p>{message}</p>
-  </div>
-);
 
-const ErrorDisplay = ({ message }: { message: string }) => (
-    <div className="error-container">
-        <p className="error-message">{message}</p>
+// --- COMPONENTS ---
+
+const NetworkSelector = ({ selectedChain, onChainChange }) => (
+    <div className="network-selector-wrapper">
+        <select
+            className="network-selector"
+            value={selectedChain.id}
+            onChange={(e) => {
+                const newChain = chains.find(c => c.id === parseInt(e.target.value));
+                if (newChain) {
+                    onChainChange(newChain);
+                }
+            }}
+            aria-label="Select blockchain network"
+        >
+            {chains.map(chain => (
+                <option key={chain.id} value={chain.id}>
+                    {chain.name}
+                </option>
+            ))}
+        </select>
     </div>
 );
 
-const LoginScreen = ({ onConnect, error }: { onConnect: () => void; error: string | null }) => (
-  <div className="login-container">
-    <h1>CryptoDash</h1>
-    <p>Tu panel de control personal para rastrear y analizar tus activos de criptomonedas. Conéctate con MetaMask para empezar.</p>
-    <button onClick={onConnect} className="btn btn-primary" aria-label="Conectar con MetaMask">
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7.53331 5.30931L12 9.74931L16.4666 5.30931L21.411 7.42431L12 16.2503L2.58997 7.42431L7.53331 5.30931Z" fill="white"/><path d="M12 2.5L2.58902 7.424L7.53302 5.309L12 9.749L16.467 5.309L21.411 7.424L12 2.5Z" fill="white"/></svg>
-      Conectar Billetera
-    </button>
-    {error && <ErrorDisplay message={error} />}
-  </div>
+
+const DashboardHeader = ({ walletAddress, onLogout, selectedChain, onChainChange }) => (
+    <header className="dashboard-header">
+        <div className="logo">CryptoDash</div>
+        <div className="wallet-network-group">
+            <div className="wallet-info">
+                <a href={`${selectedChain.explorerUrl}/address/${walletAddress}`} target="_blank" rel="noopener noreferrer" aria-label="View address on explorer">
+                    <span>{`${walletAddress.substring(0, 6)}...${walletAddress.substring(walletAddress.length - 4)}`}</span>
+                </a>
+            </div>
+            <NetworkSelector selectedChain={selectedChain} onChainChange={onChainChange} />
+        </div>
+        <button onClick={onLogout} className="disconnect-btn" aria-label="Disconnect wallet">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+                <path d="M10.09 15.59L11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5c-1.11 0-2 .9-2 2v4h2V5h14v14H5v-4H3v4c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/>
+            </svg>
+            <span className="disconnect-btn-text">Disconnect</span>
+        </button>
+    </header>
 );
 
-const ApiKeyInputScreen = ({ onSave, currentKey }: { onSave: (key: string) => void; currentKey: string | null }) => {
-    const [inputKey, setInputKey] = useState(currentKey || '');
+const BalanceCard = ({ balance, symbol, error }) => (
+    <div className="card balance-card">
+        <h3>Balance ({symbol.replace('ETH', '')})</h3>
+        {error ? (
+            <p className="component-error-message">{error}</p>
+        ) : (
+            <p>{balance !== null ? `${parseFloat(balance).toFixed(6)} ${symbol.replace('ETH', '')}` : '...'}</p>
+        )}
+    </div>
+);
 
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        if (inputKey.trim()) {
-            onSave(inputKey.trim());
+const TransactionsList = ({ transactions, chain, error }) => (
+    <div className="card transactions-card">
+        <h3>Recent Transactions</h3>
+        {error ? (
+            <p className="component-error-message">{error}</p>
+        ) : (
+            <div className="transaction-list">
+                {transactions.length > 0 ? (
+                    transactions.map(tx => (
+                        <div key={tx.hash} className="transaction-item">
+                            <div className="tx-hash">
+                                <span>Hash:</span>
+                                <a href={`${chain.explorerUrl}/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer">
+                                    {`${tx.hash.substring(0, 10)}...`}
+                                </a>
+                            </div>
+                            <div className="tx-details">
+                                <span>From: {`${tx.from.substring(0, 8)}...`}</span>
+                                <span>To: {`${tx.to ? tx.to.substring(0, 8) : 'Contract Creation'}...`}</span>
+                            </div>
+                            <div className="tx-value">
+                                {(parseFloat(tx.value) / 1e18).toFixed(4)} {chain.symbol.replace('ETH', '')}
+                            </div>
+                        </div>
+                    ))
+                ) : (
+                    <p>No recent transactions found.</p>
+                )}
+            </div>
+        )}
+    </div>
+);
+
+// --- SKELETON LOADER COMPONENTS ---
+const SkeletonBlock = ({ className = '' }) => <div className={`skeleton ${className}`}></div>;
+
+const BalanceCardSkeleton = () => (
+    <div className="card balance-card">
+        <SkeletonBlock className="skeleton-h3" />
+        <SkeletonBlock className="skeleton-p" />
+    </div>
+);
+
+const TransactionsListSkeleton = () => (
+    <div className="card transactions-card">
+        <SkeletonBlock className="skeleton-h3" />
+        <div className="transaction-list">
+            {[...Array(3)].map((_, i) => (
+                <div key={i} className="transaction-item-skeleton">
+                    <div className="skeleton-group">
+                        <SkeletonBlock className="skeleton-text" />
+                        <SkeletonBlock className="skeleton-text-short" />
+                    </div>
+                     <div className="skeleton-group" style={{alignItems: 'center'}}>
+                        <SkeletonBlock className="skeleton-text" />
+                        <SkeletonBlock className="skeleton-text-short" />
+                    </div>
+                    <SkeletonBlock className="skeleton-text" />
+                </div>
+            ))}
+        </div>
+    </div>
+);
+
+const LoginScreen = ({ onLogin }) => {
+    const [apiKeys, setApiKeys] = useState({
+        ethereum: '',
+        arbitrum: '',
+        optimism: '',
+        base: ''
+    });
+
+    const handleInputChange = (chainName, value) => {
+        setApiKeys(prev => ({ ...prev, [chainName]: value }));
+    };
+
+    const handleConnect = async () => {
+        if (!apiKeys.ethereum) {
+            alert('Please enter your Etherscan API key for Ethereum.');
+            return;
+        }
+        if (typeof window.ethereum !== 'undefined') {
+            try {
+                const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                if (accounts.length > 0) {
+                    onLogin(accounts[0], apiKeys);
+                }
+            } catch (error) {
+                console.error("User rejected the connection request:", error);
+            }
+        } else {
+            if (isMobileDevice()) {
+                // On mobile/tablet, user is likely in a standard browser.
+                // Guide them to open the dApp in their wallet's browser via deep link.
+                alert("Wallet not detected. Please open this page in the MetaMask app's browser. Tapping 'OK' will attempt to redirect you.");
+                const dappUrl = window.location.href.replace(/https?:\/\//, '');
+                const metamaskDeepLink = `https://metamask.app.link/dapp/${dappUrl}`;
+                window.location.href = metamaskDeepLink;
+            } else {
+                // On desktop, the user needs to install a wallet extension.
+                alert('MetaMask extension not detected. Please install MetaMask to use this app.');
+            }
         }
     };
 
     return (
         <div className="login-container">
-            <h1>Configuración Requerida</h1>
-            <p>Por favor, proporciona tu clave API de Etherscan para obtener los datos de la blockchain.</p>
-            <form onSubmit={handleSubmit} className="api-key-form">
-                <input
-                    type="password"
-                    value={inputKey}
-                    onChange={(e) => setInputKey(e.target.value)}
-                    placeholder="Pega tu clave API de Etherscan aquí"
-                    className="api-key-input"
-                    aria-label="Clave API de Etherscan"
-                    required
-                />
-                <button type="submit" className="btn btn-primary">Guardar y Continuar</button>
-            </form>
-            <p className="api-key-note">Tu clave API se guardará localmente en tu navegador. Puedes obtener una gratis en <a href="https://etherscan.io/myapikey" target="_blank" rel="noopener noreferrer">Etherscan</a>.</p>
+            <div className="login-box">
+                <h1>CryptoDash</h1>
+                <p>Connect your wallet and enter your API keys to view your dashboard.</p>
+                {chains.map(chain => (
+                    <div className="form-group" key={chain.id}>
+                        <label htmlFor={`apiKey-${chain.apiKeyName}`}>
+                            {chain.name} API Key {chain.name === 'Ethereum' ? '' : '(Optional)'}
+                        </label>
+                        <input
+                            id={`apiKey-${chain.apiKeyName}`}
+                            type="password"
+                            value={apiKeys[chain.apiKeyName]}
+                            onChange={(e) => handleInputChange(chain.apiKeyName, e.target.value)}
+                            placeholder={`Your ${chain.name} API Key`}
+                        />
+                    </div>
+                ))}
+                <button onClick={handleConnect}>Connect with MetaMask</button>
+            </div>
         </div>
     );
 };
 
+const Dashboard = ({ walletAddress, apiKeys, onLogout }) => {
+    const [selectedChain, setSelectedChain] = useState(chains[0]);
+    const [balance, setBalance] = useState(null);
+    const [transactions, setTransactions] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [componentErrors, setComponentErrors] = useState({ balance: '', transactions: '' });
 
-const DashboardHeader = ({ account, onDisconnect, onChangeApiKey }: { account: string; onDisconnect: () => void; onChangeApiKey: () => void; }) => {
-    const formattedAccount = `${account.substring(0, 6)}...${account.substring(account.length - 4)}`;
+    const switchNetwork = useCallback(async (chain) => {
+        if (!window.ethereum) return false;
+        try {
+            await window.ethereum.request({
+                method: 'wallet_switchEthereumChain',
+                params: [{ chainId: chain.chainIdHex }],
+            });
+            return true;
+        } catch (switchError) {
+            console.error("Could not switch network:", switchError);
+            alert(`Could not switch to ${chain.name}. Please make sure the network is added to your MetaMask wallet.`);
+            return false;
+        }
+    }, []);
+
+    const handleNetworkChange = useCallback(async (newChain) => {
+        const success = await switchNetwork(newChain);
+        if (success) {
+            setSelectedChain(newChain);
+        }
+    }, [switchNetwork]);
+
+    const fetchData = useCallback(async (address, chain, keys) => {
+        setLoading(true);
+        setComponentErrors({ balance: '', transactions: '' });
+        setBalance(null);
+        setTransactions([]);
+        
+        let newErrors = { balance: '', transactions: '' };
+
+        // 1. Fetch Balance using MetaMask RPC (more reliable)
+        try {
+            const hexBalance = await window.ethereum.request({
+                method: 'eth_getBalance',
+                params: [address, 'latest'],
+            });
+            const weiBalance = parseInt(hexBalance, 16);
+            setBalance(weiBalance / 1e18);
+        } catch (error) {
+            console.error("Failed to fetch balance via RPC:", error);
+            newErrors.balance = 'Could not fetch balance from wallet.';
+        }
+
+        // 2. Fetch Transactions using Etherscan API via Proxy
+        const chainApiKey = keys[chain.apiKeyName];
+        if (!chainApiKey) {
+             newErrors.transactions = `Please provide an API Key for ${chain.name} to see transactions.`;
+        } else {
+            try {
+                const PROXY_URL = 'https://corsproxy.io/?';
+                const txUrl = `${chain.apiUrl}?module=account&action=txlist&address=${address}&startblock=0&endblock=99999999&page=1&offset=10&sort=desc&apikey=${chainApiKey}`;
+                const proxiedTxUrl = `${PROXY_URL}${encodeURIComponent(txUrl)}`;
+
+                const response = await fetch(proxiedTxUrl);
+                if (!response.ok) {
+                    throw new Error(`Network response was not ok: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                if (data.status === '1') {
+                    setTransactions(data.result || []);
+                } else if (data.message?.includes('No transactions found')) {
+                    setTransactions([]);
+                } else {
+                    if (data.result?.includes('Invalid API Key') || data.message?.includes('Invalid API Key')) {
+                        newErrors.transactions = `Invalid API Key for ${chain.name}. Please check your key.`;
+                    } else {
+                        newErrors.transactions = data.result || data.message || `API error fetching ${chain.name} transactions.`;
+                    }
+                }
+            } catch (error) {
+                console.error("Transactions fetch failed:", error);
+                newErrors.transactions = 'Network error. Could not fetch transactions.';
+            }
+        }
+        
+        setComponentErrors(newErrors);
+        setLoading(false);
+
+    }, []);
+
+    useEffect(() => {
+        if (walletAddress) {
+            fetchData(walletAddress, selectedChain, apiKeys);
+        }
+    }, [walletAddress, selectedChain, apiKeys, fetchData]);
+    
+    useEffect(() => {
+        const handleChainChanged = (chainId) => {
+            const newChain = chains.find(c => c.chainIdHex.toLowerCase() === chainId.toLowerCase());
+            if (newChain && newChain.id !== selectedChain.id) {
+                setSelectedChain(newChain);
+            }
+        };
+        
+        if (window.ethereum) {
+            window.ethereum.on('chainChanged', handleChainChanged);
+        }
+
+        return () => {
+            if (window.ethereum) {
+                window.ethereum.removeListener('chainChanged', handleChainChanged);
+            }
+        };
+    }, [selectedChain.id]);
+
     return (
-        <header className="dashboard-header">
-            <div className="wallet-info" aria-label={`Cuenta conectada: ${account}`}>{formattedAccount}</div>
-            <div className="header-actions">
-              <button onClick={onChangeApiKey} className="btn btn-secondary">Cambiar Clave API</button>
-              <button onClick={onDisconnect} className="btn btn-secondary">Desconectar</button>
-            </div>
-        </header>
+        <div className="dashboard-container">
+            <DashboardHeader
+                walletAddress={walletAddress}
+                onLogout={onLogout}
+                selectedChain={selectedChain}
+                onChainChange={handleNetworkChange}
+            />
+            <main>
+                {loading ? (
+                    <>
+                        <BalanceCardSkeleton />
+                        <TransactionsListSkeleton />
+                    </>
+                ) : (
+                    <>
+                        <BalanceCard balance={balance} symbol={selectedChain.symbol} error={componentErrors.balance} />
+                        <TransactionsList transactions={transactions} chain={selectedChain} error={componentErrors.transactions} />
+                    </>
+                )}
+            </main>
+        </div>
     );
 };
-
-const SummaryCard = ({ title, value }: { title: string; value: string | number; }) => (
-    <div className="card">
-        <h3 className="card-title">{title}</h3>
-        <p className="card-value">{value}</p>
-    </div>
-);
-
-// --- Funciones de Utilidad ---
-const formatBalance = (wei: string): string => {
-    const ether = parseFloat(wei) / 1e18;
-    return ether.toFixed(4);
-};
-
-const formatDate = (timestamp: string): string => {
-    return new Date(parseInt(timestamp) * 1000).toLocaleDateString();
-};
-
-// --- Componente Principal de la Aplicación ---
 
 const App = () => {
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [loadingMessage, setLoadingMessage] = useState<string>('Inicializando...');
-  const [account, setAccount] = useState<string | null>(null);
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  const [showApiKeyScreen, setShowApiKeyScreen] = useState<boolean>(false);
-  const [balance, setBalance] = useState<string | null>(null);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [error, setError] = useState<string | null>(null);
-
-  // Datos simulados para tokens
-  const mockTokens: Token[] = [
-    { symbol: 'USDT', name: 'Tether', balance: 2450.50, usdValue: 2450.50 },
-    { symbol: 'LINK', name: 'Chainlink', balance: 120.75, usdValue: 1811.25 },
-    { symbol: 'UNI', name: 'Uniswap', balance: 35.20, usdValue: 352.00 },
-  ];
-
-  const fetchData = useCallback(async (walletAddress: string, key: string) => {
-    if (!key) {
-        setError("La clave API de Etherscan no está configurada.");
-        setIsLoading(false);
-        return;
-    }
+    const [walletAddress, setWalletAddress] = useState('');
+    const [apiKeys, setApiKeys] = useState(null);
     
-    setIsLoading(true);
-    setError(null);
-    try {
-        setLoadingMessage('Obteniendo datos de la blockchain...');
-        const network = 'mainnet';
-        
-        const balanceResponse = await fetch(`https://api.etherscan.io/api?module=account&action=balance&address=${walletAddress}&tag=latest&apikey=${key}`);
-        const balanceData = await balanceResponse.json();
-        if (balanceData.status === '1') {
-            setBalance(formatBalance(balanceData.result));
-        } else {
-            throw new Error(balanceData.message || 'No se pudo obtener el saldo.');
+    useEffect(() => {
+        const storedAddress = localStorage.getItem('walletAddress');
+        const storedApiKeys = localStorage.getItem('apiKeys');
+        if (storedAddress && storedApiKeys) {
+            setWalletAddress(storedAddress);
+            setApiKeys(JSON.parse(storedApiKeys));
         }
+    }, []);
 
-        const txResponse = await fetch(`https://api.etherscan.io/api?module=account&action=txlist&address=${walletAddress}&startblock=0&endblock=99999999&page=1&offset=10&sort=desc&apikey=${key}`);
-        const txData = await txResponse.json();
-         if (txData.status === '1') {
-            setTransactions(txData.result);
-        } else {
-            if (txData.message === 'No transactions found') {
-                setTransactions([]);
-            } else {
-                throw new Error(txData.message || 'No se pudieron obtener las transacciones.');
-            }
-        }
-    } catch (err: any) {
-        console.error("Error al obtener datos:", err);
-        const errorMessage = err.message.includes("Invalid API Key")
-            ? "Clave API de Etherscan inválida. Por favor, verifica tu clave."
-            : `Error al obtener datos: ${err.message}.`;
-        setError(errorMessage);
-    } finally {
-        setIsLoading(false);
-    }
-  }, []);
+    const handleLogin = (address, keys) => {
+        setWalletAddress(address);
+        setApiKeys(keys);
+        localStorage.setItem('walletAddress', address);
+        localStorage.setItem('apiKeys', JSON.stringify(keys));
+    };
 
-  const handleAccountsChanged = useCallback((accounts: string[]) => {
-      if (accounts.length === 0) {
-          setAccount(null);
-          setBalance(null);
-          setTransactions([]);
-      } else if (accounts[0] !== account) {
-          const newAccount = accounts[0];
-          setAccount(newAccount);
-          if (apiKey) {
-            fetchData(newAccount, apiKey);
-          }
-      }
-  }, [account, apiKey, fetchData]);
+    const handleLogout = () => {
+        setWalletAddress('');
+        setApiKeys(null);
+        localStorage.removeItem('walletAddress');
+        localStorage.removeItem('apiKeys');
+    };
 
-  useEffect(() => {
-    const savedApiKey = localStorage.getItem('etherscanApiKey');
-    if (savedApiKey) {
-      setApiKey(savedApiKey);
-    }
-      
-    if (window.ethereum) {
-        window.ethereum.on('accountsChanged', handleAccountsChanged);
-        
-        const checkConnection = async () => {
-            try {
-                const accounts = await window.ethereum.request({ method: 'eth_accounts' });
-                if (accounts.length > 0) {
-                    const userAccount = accounts[0];
-                    setAccount(userAccount);
-                    if (savedApiKey) {
-                        fetchData(userAccount, savedApiKey);
-                    } else {
-                        setIsLoading(false);
-                    }
-                } else {
-                    setIsLoading(false);
-                }
-            } catch (err) {
-                console.error("Error al comprobar la conexión de la billetera:", err);
-                setIsLoading(false);
-            }
-        };
-        checkConnection();
-        
-        return () => {
-            window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
-        };
-    } else {
-        setIsLoading(false);
-    }
-  }, [fetchData, handleAccountsChanged]);
-
-
-  const connectWallet = async () => {
-    if (!window.ethereum) {
-      setError("MetaMask no está instalado. Por favor, instala la extensión y vuelve a intentarlo.");
-      return;
-    }
-
-    try {
-      setError(null);
-      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-      const userAccount = accounts[0];
-      setAccount(userAccount);
-      if (apiKey) {
-        fetchData(userAccount, apiKey);
-      }
-    } catch (err: any) {
-      console.error("Error al conectar la billetera:", err);
-      setError(err.message || "El usuario rechazó la conexión.");
-    }
-  };
-  
-  const disconnectWallet = () => {
-      setAccount(null);
-      setBalance(null);
-      setTransactions([]);
-      setError(null);
-      // Opcional: limpiar la clave API al desconectar
-      // localStorage.removeItem('etherscanApiKey');
-      // setApiKey(null);
-  };
-
-  const handleSaveApiKey = (key: string) => {
-    localStorage.setItem('etherscanApiKey', key);
-    setApiKey(key);
-    setShowApiKeyScreen(false);
-    if (account) {
-      fetchData(account, key);
-    }
-  };
-
-  const handleChangeApiKey = () => {
-    setShowApiKeyScreen(true);
-  };
-
-  if (isLoading) {
-    return <LoadingScreen message={loadingMessage} />;
-  }
-
-  if (!account) {
-    return <LoginScreen onConnect={connectWallet} error={error} />;
-  }
-  
-  if (!apiKey || showApiKeyScreen) {
-      return <ApiKeyInputScreen onSave={handleSaveApiKey} currentKey={apiKey} />;
-  }
-
-  return (
-    <div className="container">
-      <DashboardHeader account={account} onDisconnect={disconnectWallet} onChangeApiKey={handleChangeApiKey} />
-      {error && <ErrorDisplay message={error} />}
-
-      <section className="dashboard-grid">
-        <SummaryCard title="Saldo de ETH" value={balance ?? '...'} />
-        <SummaryCard title="Transacciones Recientes" value={transactions.length >= 10 ? '10' : transactions.length} />
-        <SummaryCard title="Valor Total del Portfolio (Simulado)" value={`$${mockTokens.reduce((sum, t) => sum + t.usdValue, 0).toFixed(2)}`} />
-      </section>
-
-      <section className="card">
-        <h3 className="card-title">Mis Tokens (Simulado)</h3>
-        <div className="table-container">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Activo</th>
-                        <th>Balance</th>
-                        <th>Valor en USD</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {mockTokens.map(token => (
-                        <tr key={token.symbol}>
-                            <td>{token.name} ({token.symbol})</td>
-                            <td>{token.balance.toFixed(2)}</td>
-                            <td>${token.usdValue.toFixed(2)}</td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
-        </div>
-      </section>
-
-      <section className="card" style={{ marginTop: '1.5rem' }}>
-        <h3 className="card-title">Historial de Transacciones Recientes</h3>
-        <div className="table-container">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Tipo</th>
-                        <th>Desde</th>
-                        <th>Hasta</th>
-                        <th>Valor (ETH)</th>
-                        <th>Fecha</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {transactions.length > 0 ? transactions.map(tx => (
-                        <tr key={tx.hash}>
-                            <td>
-                                {tx.to.toLowerCase() === account.toLowerCase()
-                                ? <span className="tx-type tx-type-in">IN</span>
-                                : <span className="tx-type tx-type-out">OUT</span>
-                                }
-                            </td>
-                            <td className="address-cell">{`${tx.from.substring(0, 6)}...`}</td>
-                            <td className="address-cell">{`${tx.to.substring(0, 6)}...`}</td>
-                            <td>{formatBalance(tx.value)}</td>
-                            <td>{formatDate(tx.timeStamp)}</td>
-                        </tr>
-                    )) : (
-                        <tr>
-                            <td colSpan={5} style={{textAlign: 'center'}}>No se encontraron transacciones.</td>
-                        </tr>
-                    )}
-                </tbody>
-            </table>
-        </div>
-      </section>
-    </div>
-  );
+    return (
+        <>
+            {walletAddress && apiKeys ? (
+                <Dashboard walletAddress={walletAddress} apiKeys={apiKeys} onLogout={handleLogout} />
+            ) : (
+                <LoginScreen onLogin={handleLogin} />
+            )}
+        </>
+    );
 };
 
-const container = document.getElementById('root');
-if (container) {
-  const root = createRoot(container);
-  root.render(<App />);
-}
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
